@@ -6,8 +6,8 @@ import asyncio
 import random
 import aiohttp
 from datetime import datetime, timedelta
-TOKEN            = os.environ.get("DISCORD_TOKEN")
-YOUTUBE_API_KEY  = os.environ.get("YOUTUBE_API_KEY")
+TOKEN = "MTUxNjAyNjU3NzI0NTQ0MjExOA.GICJfC.L098CANoIVeq0QQpH3n5thxZbwnqTWK0-eBHuI"
+YOUTUBE_API_KEY = "AIzaSyCFE049WK4AfZTi7pHX-K-i3EsUA8WN07s"
 
 # ──────────────────────────────────────────────
 # CONFIGURARE
