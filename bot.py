@@ -742,8 +742,10 @@ async def on_ready():
 
     # DM către owner la fiecare pornire
     try:
-        owner = await bot.fetch_user(OWNER_ID)
-        await owner.send(f"✅ Botul a pornit/restartat cu succes la `{datetime.utcnow().strftime('%d.%m.%Y %H:%M')} UTC`")
+        guild = bot.guilds[0]
+        owner = guild.get_member(OWNER_ID)
+        if owner:
+            await owner.send(f"✅ Botul a pornit/restartat cu succes la `{datetime.utcnow().strftime('%d.%m.%Y %H:%M')} UTC`")
     except Exception:
         pass
 
