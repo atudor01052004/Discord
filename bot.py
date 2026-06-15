@@ -45,11 +45,10 @@ ROL_UNVERIFIED = "Unverified"
 ROLURI_STAFF   = ["Admin", "Moderator"]
 
 # YouTube
-YOUTUBE_CHANNEL_ID  = "UCxxxxxxxxxxxxxx"  # ← se completează automat la pornire
 YOUTUBE_HANDLE      = "Tenek13"
-ORA_START_CHECK     = 15   # începe verificarea la ora 15:00
-ORA_END_CHECK       = 23   # oprește verificarea la ora 23:00
-INTERVAL_MINUTE     = 5    # verifică la fiecare 5 minute
+ORA_START_CHECK     = 15
+ORA_END_CHECK       = 23
+INTERVAL_MINUTE     = 5
 
 # ──────────────────────────────────────────────
 # TEXTE
@@ -126,7 +125,7 @@ tree = bot.tree
 
 giveaway_data = {}
 youtube_channel_id_resolved = None
-live_anuntat = False  # evităm spam dacă botul redetectează același live
+live_anuntat = False
 
 
 # ──────────────────────────────────────────────
@@ -152,7 +151,6 @@ def are_rol_staff(member: discord.Member) -> bool:
     return any(r.name in ROLURI_STAFF for r in member.roles)
 
 async def get_youtube_channel_id(handle: str) -> str | None:
-    """Rezolvă handle-ul YouTube (@Tenek13) în channel ID."""
     url = (
         f"https://www.googleapis.com/youtube/v3/search"
         f"?part=snippet&q={handle}&type=channel&key={YOUTUBE_API_KEY}"
@@ -166,7 +164,6 @@ async def get_youtube_channel_id(handle: str) -> str | None:
     return None
 
 async def check_live(channel_id: str) -> dict | None:
-    """Verifică dacă canalul e live. Returnează datele live-ului sau None."""
     url = (
         f"https://www.googleapis.com/youtube/v3/search"
         f"?part=snippet&channelId={channel_id}&eventType=live&type=video&key={YOUTUBE_API_KEY}"
@@ -196,7 +193,7 @@ async def check_live(channel_id: str) -> dict | None:
 async def verifica_live():
     global live_anuntat, youtube_channel_id_resolved
 
-    ora_acum = datetime.utcnow().hour + 2  # UTC+2 Romania
+    ora_acum = datetime.utcnow().hour + 2
     if not (ORA_START_CHECK <= ora_acum < ORA_END_CHECK):
         return
 
@@ -262,6 +259,9 @@ class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
 
         try:
             await member.add_roles(*roluri_de_dat, reason="Verificare completată")
+            rol_unverified = discord.utils.get(guild.roles, name=ROL_UNVERIFIED)
+            if rol_unverified and rol_unverified in member.roles:
+                await member.remove_roles(rol_unverified, reason="Verificare completată")
             try:
                 await member.edit(nick=nick_nou)
             except discord.Forbidden:
@@ -595,7 +595,6 @@ async def on_ready():
     await tree.sync()
     print("✅ Slash commands sincronizate")
 
-    # Rezolvăm channel ID YouTube din handle
     if YOUTUBE_API_KEY:
         youtube_channel_id_resolved = await get_youtube_channel_id(YOUTUBE_HANDLE)
         if youtube_channel_id_resolved:
@@ -604,9 +603,8 @@ async def on_ready():
         else:
             print("⚠️  Nu s-a putut rezolva channel ID-ul YouTube.")
     else:
-        print("⚠️  YOUTUBE_API_KEY lipsă din .env")
+        print("⚠️  YOUTUBE_API_KEY lipsă")
 
-    # #get-started
     canal_vs = bot.get_channel(CANAL_VERIFICARE_ID)
     if canal_vs:
         mesaj_existent = None
