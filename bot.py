@@ -8,9 +8,9 @@ import aiohttp
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
-TOKEN            = os.getenv("DISCORD_TOKEN")
-YOUTUBE_API_KEY  = os.getenv("YOUTUBE_API_KEY")
+load_dotenv(override=False)
+TOKEN            = os.environ.get("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN")
+YOUTUBE_API_KEY  = os.environ.get("YOUTUBE_API_KEY") or os.getenv("YOUTUBE_API_KEY")
 
 # ──────────────────────────────────────────────
 # CONFIGURARE
