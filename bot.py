@@ -44,7 +44,6 @@ ROL_VERIFIED   = "Verified"
 ROL_UNVERIFIED = "Unverified"
 ROLURI_STAFF   = ["Admin", "Moderator"]
 
-# YouTube
 YOUTUBE_HANDLE      = "Tenek13"
 ORA_START_CHECK     = 15
 ORA_END_CHECK       = 23
@@ -119,11 +118,18 @@ TEPARI_TEXT = (
 
 intents = discord.Intents.default()
 intents.members = True
+intents.invites = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 giveaway_data = {}
+# { msg_id: { participanti, premiu, end_time, youtube, instagram, tiktok, canal_id,
+#             membri_minim (int|None), pornit (bool), invite_codes: {user_id: code} } }
+
+invite_tracker = {}
+# { invite_code: user_id } — cine a creat fiecare invitație
+
 youtube_channel_id_resolved = None
 live_anuntat = False
 
@@ -184,6 +190,52 @@ async def check_live(channel_id: str) -> dict | None:
                 }
     return None
 
+async def genereaza_invite(guild: discord.Guild) -> discord.Invite | None:
+    """Generează un link de invitație unic — expire never, unlimited uses."""
+    canal = guild.get_channel(CANAL_VERIFICARE_ID)
+    if not canal:
+        return None
+    try:
+        invite = await canal.create_invite(max_age=0, max_uses=0, unique=True)
+        return invite
+    except discord.Forbidden:
+        return None
+
+def embed_giveaway(data: dict, guild: discord.Guild) -> discord.Embed:
+    """Construiește embed-ul giveaway-ului cu contor de membri dacă e cazul."""
+    taskuri = []
+    if data.get("youtube"):
+        taskuri.append(f"[📺 Subscribe pe YouTube]({data['youtube']})")
+    if data.get("instagram"):
+        taskuri.append(f"[📸 Follow pe Instagram]({data['instagram']})")
+    if data.get("tiktok"):
+        taskuri.append(f"[🎵 Follow pe TikTok]({data['tiktok']})")
+    taskuri_text = "\n".join(taskuri) if taskuri else "Nicio condiție — participare liberă!"
+
+    membri_minim = data.get("membri_minim")
+    membri_actuali = guild.member_count if guild else 0
+
+    if membri_minim and not data.get("pornit"):
+        status = f"⏳ Așteptăm **{membri_actuali}/{membri_minim}** membri pentru a porni countdown-ul"
+        end_text = "Countdown pornește când se atinge numărul de membri"
+    else:
+        timestamp = int(data["end_time"].timestamp())
+        status = f"**⏰ Extragere:** <t:{timestamp}:F>\n**⏳ Timp rămas:** <t:{timestamp}:R>"
+        end_text = None
+
+    desc = (
+        f"**Premiu:** {data['premiu']}\n\n"
+        f"**📋 Condiții de participare:**\n{taskuri_text}\n\n"
+        f"Apasă butonul **Participă** după ce ai completat taskurile.\n\n"
+        f"{status}"
+    )
+    if membri_minim:
+        desc += f"\n\n🎟️ **Invitațiile aduc șanse extra** — 1 invitație = 1 ticket bonus!"
+
+    embed = discord.Embed(title="🎉 GIVEAWAY", description=desc, color=0xFEE75C)
+    embed.set_footer(text=f"Giveaway • Hydra Prestige")
+    return embed
+
 
 # ──────────────────────────────────────────────
 # TASK YOUTUBE LIVE
@@ -196,7 +248,6 @@ async def verifica_live():
     ora_acum = datetime.utcnow().hour + 2
     if not (ORA_START_CHECK <= ora_acum < ORA_END_CHECK):
         return
-
     if not youtube_channel_id_resolved:
         return
 
@@ -215,10 +266,36 @@ async def verifica_live():
             await canal.send("@everyone", embed=embed)
             live_anuntat = True
             print(f"✅ Live anunțat: {live['titlu']}")
-
     elif not live and live_anuntat:
         live_anuntat = False
         print("ℹ️  Live încheiat, resetat flag.")
+
+
+# ──────────────────────────────────────────────
+# TASK CONTOR MEMBRI GIVEAWAY
+# ──────────────────────────────────────────────
+
+@tasks.loop(seconds=30)
+async def verifica_membrii_giveaway():
+    for msg_id, data in list(giveaway_data.items()):
+        if data.get("membri_minim") and not data.get("pornit"):
+            canal = bot.get_channel(data["canal_id"])
+            if not canal:
+                continue
+            guild = canal.guild
+            if guild.member_count >= data["membri_minim"]:
+                # Pornim countdown-ul
+                data["pornit"] = True
+                data["end_time"] = datetime.utcnow() + timedelta(days=data["zile"])
+                asyncio.create_task(countdown_giveaway(msg_id, data["zile"] * 86400))
+                print(f"✅ Giveaway {msg_id} pornit — s-au atins {data['membri_minim']} membri")
+
+            # Actualizăm embed-ul cu contorul nou
+            try:
+                msg = await canal.fetch_message(msg_id)
+                await msg.edit(embed=embed_giveaway(data, guild))
+            except Exception:
+                pass
 
 
 # ──────────────────────────────────────────────
@@ -336,9 +413,9 @@ class VerificareView(discord.ui.View):
 class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
     premiu = discord.ui.TextInput(label="Premiu", placeholder="ex: 1.000.000 Yang", max_length=100)
     durata = discord.ui.TextInput(label="Durată (în zile)", placeholder="ex: 7", max_length=3)
+    membri_minim = discord.ui.TextInput(label="Membri minim pentru start (opțional)", placeholder="ex: 50 — lasă gol dacă nu e necesar", required=False, max_length=6)
     youtube = discord.ui.TextInput(label="Link YouTube (opțional)", placeholder="https://youtube.com/@canal", required=False, max_length=200)
     instagram = discord.ui.TextInput(label="Link Instagram (opțional)", placeholder="https://instagram.com/cont", required=False, max_length=200)
-    tiktok = discord.ui.TextInput(label="Link TikTok (opțional)", placeholder="https://tiktok.com/@cont", required=False, max_length=200)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -349,49 +426,47 @@ class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
             await interaction.response.send_message("❌ Durata trebuie să fie un număr între 1 și 365.", ephemeral=True)
             return
 
-        end_time = datetime.utcnow() + timedelta(days=zile)
-        timestamp = int(end_time.timestamp())
+        membri_min = None
+        if self.membri_minim.value.strip():
+            try:
+                membri_min = int(self.membri_minim.value.strip())
+                if membri_min < 1:
+                    raise ValueError
+            except ValueError:
+                await interaction.response.send_message("❌ Numărul de membri trebuie să fie un număr pozitiv.", ephemeral=True)
+                return
+
         canal = bot.get_channel(CANAL_GIVEAWAY_ID)
         if not canal:
             await interaction.response.send_message("❌ Canalul de giveaway nu a fost găsit.", ephemeral=True)
             return
 
-        taskuri = []
-        if self.youtube.value.strip():
-            taskuri.append(f"[📺 Subscribe pe YouTube]({self.youtube.value.strip()})")
-        if self.instagram.value.strip():
-            taskuri.append(f"[📸 Follow pe Instagram]({self.instagram.value.strip()})")
-        if self.tiktok.value.strip():
-            taskuri.append(f"[🎵 Follow pe TikTok]({self.tiktok.value.strip()})")
+        guild = interaction.guild
+        pornit = True
+        end_time = datetime.utcnow() + timedelta(days=zile)
 
-        taskuri_text = "\n".join(taskuri) if taskuri else "Nicio condiție — participare liberă!"
+        if membri_min and guild.member_count < membri_min:
+            pornit = False
 
-        embed = discord.Embed(
-            title="🎉 GIVEAWAY",
-            description=(
-                f"**Premiu:** {self.premiu.value.strip()}\n\n"
-                f"**📋 Condiții de participare:**\n{taskuri_text}\n\n"
-                f"Apasă butonul **Participă** după ce ai completat taskurile.\n\n"
-                f"**⏰ Extragere:** <t:{timestamp}:F>\n"
-                f"**⏳ Timp rămas:** <t:{timestamp}:R>"
-            ),
-            color=0xFEE75C
-        )
-        embed.set_footer(text=f"Giveaway creat de {interaction.user.name} • Hydra Prestige")
-
-        view = GiveawayView()
-        msg = await canal.send("@everyone", embed=embed, view=view)
-
-        giveaway_data[msg.id] = {
+        data = {
             "participanti": set(),
+            "invite_codes": {},  # { user_id: invite_code }
+            "invitati_de": {},   # { invite_code: user_id } — cine a adus pe cine
             "premiu": self.premiu.value.strip(),
             "end_time": end_time,
+            "zile": zile,
             "youtube": self.youtube.value.strip(),
             "instagram": self.instagram.value.strip(),
-            "tiktok": self.tiktok.value.strip(),
-            "msg_id": msg.id,
+            "tiktok": "",
             "canal_id": CANAL_GIVEAWAY_ID,
+            "membri_minim": membri_min,
+            "pornit": pornit,
         }
+
+        view = GiveawayView()
+        msg = await canal.send("@everyone", embed=embed_giveaway(data, guild), view=view)
+        data["msg_id"] = msg.id
+        giveaway_data[msg.id] = data
 
         try:
             await interaction.message.delete()
@@ -399,7 +474,12 @@ class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
             pass
 
         await interaction.response.send_message("✅ Giveaway creat cu succes!", ephemeral=True, delete_after=5)
-        asyncio.create_task(countdown_giveaway(msg.id, zile * 86400))
+
+        if pornit:
+            asyncio.create_task(countdown_giveaway(msg.id, zile * 86400))
+        else:
+            if not verifica_membrii_giveaway.is_running():
+                verifica_membrii_giveaway.start()
 
 
 class GiveawayView(discord.ui.View):
@@ -414,16 +494,18 @@ class GiveawayView(discord.ui.View):
             return
 
         data = giveaway_data[msg_id]
-        if interaction.user.id in data["participanti"]:
+        user = interaction.user
+
+        if user.id in data["participanti"]:
             await interaction.response.send_message("✅ Ești deja înscris!", ephemeral=True)
             return
 
         taskuri = []
-        if data["youtube"]:
+        if data.get("youtube"):
             taskuri.append(f"[📺 Subscribe pe YouTube]({data['youtube']})")
-        if data["instagram"]:
+        if data.get("instagram"):
             taskuri.append(f"[📸 Follow pe Instagram]({data['instagram']})")
-        if data["tiktok"]:
+        if data.get("tiktok"):
             taskuri.append(f"[🎵 Follow pe TikTok]({data['tiktok']})")
 
         mesaj = ("Completează taskurile și apasă **Confirm înscriere**:\n\n" + "\n".join(taskuri)) if taskuri else "Apasă **Confirm înscriere** pentru a participa."
@@ -440,33 +522,80 @@ class ConfirmView(discord.ui.View):
         if self.msg_id not in giveaway_data:
             await interaction.response.send_message("❌ Giveaway-ul nu mai este activ.", ephemeral=True)
             return
-        giveaway_data[self.msg_id]["participanti"].add(interaction.user.id)
-        total = len(giveaway_data[self.msg_id]["participanti"])
-        await interaction.response.send_message(f"🎉 Ești înscris! Mult succes!\n📊 Participanți: **{total}**", ephemeral=True)
+
+        data = giveaway_data[self.msg_id]
+        user = interaction.user
+
+        data["participanti"].add(user.id)
+        total = len(data["participanti"])
+
+        # Dacă giveaway-ul are condiție de membri, generăm invite unic și trimitem DM
+        if data.get("membri_minim"):
+            guild = interaction.guild
+            invite = await genereaza_invite(guild)
+            if invite:
+                data["invite_codes"][user.id] = invite.code
+                invite_tracker[invite.code] = user.id
+
+                try:
+                    embed_dm = discord.Embed(
+                        title="🎟️ Linkul tău de invitație",
+                        description=(
+                            f"Ești înscris la giveaway! 🎉\n\n"
+                            f"**Invitațiile pe server îți aduc șanse în plus:**\n"
+                            f"1 invitație = 1 ticket bonus la tragerea la sorți\n\n"
+                            f"**Linkul tău unic:**\n{invite.url}\n\n"
+                            f"Cu cât inviți mai mulți prieteni, cu atât ai șanse mai mari!"
+                        ),
+                        color=0xFEE75C
+                    )
+                    embed_dm.set_footer(text="Hydra Prestige • Metin2 Community")
+                    await user.send(embed=embed_dm)
+                except discord.Forbidden:
+                    pass
+
+        await interaction.response.send_message(
+            f"🎉 Ești înscris! Mult succes!\n📊 Participanți: **{total}**",
+            ephemeral=True
+        )
 
 
 async def countdown_giveaway(msg_id: int, secunde: int):
     await asyncio.sleep(secunde)
     if msg_id not in giveaway_data:
         return
+
     data = giveaway_data[msg_id]
     canal = bot.get_channel(data["canal_id"])
     if not canal:
         return
+
     participanti = list(data["participanti"])
     if not participanti:
         await canal.send("🎉 Giveaway-ul s-a încheiat dar nu a existat niciun participant. Mai încercați data viitoare!")
         del giveaway_data[msg_id]
         return
-    castigator_id = random.choice(participanti)
+
+    # Construim lista de tickete (participanti + tickete bonus din invitații)
+    tickete = list(participanti)  # fiecare participant are cel puțin 1 ticket
+    for user_id in participanti:
+        invite_code = data["invite_codes"].get(user_id)
+        if invite_code:
+            # Numărăm câți au intrat prin invitația acestui user
+            bonus = sum(1 for code, inviter in data.get("invitati_de", {}).items() if inviter == user_id)
+            tickete.extend([user_id] * bonus)
+
+    castigator_id = random.choice(tickete)
     castigator = canal.guild.get_member(castigator_id)
     nume_castigator = castigator.mention if castigator else f"<@{castigator_id}>"
+
     embed = discord.Embed(
         title="🏆 Giveaway încheiat!",
         description=(
             f"**Premiu:** {data['premiu']}\n\n"
             f"🎉 **Câștigătorul este:** {nume_castigator}\n\n"
-            f"📊 Total participanți: **{len(participanti)}**\n\n"
+            f"📊 Total participanți: **{len(participanti)}**\n"
+            f"🎟️ Total tickete: **{len(tickete)}**\n\n"
             f"Mulțumim tuturor pentru participare și vă mai așteptăm!"
         ),
         color=0x57F287
@@ -474,6 +603,58 @@ async def countdown_giveaway(msg_id: int, secunde: int):
     embed.set_footer(text="Hydra Prestige • Metin2 Community")
     await canal.send("@everyone", embed=embed)
     del giveaway_data[msg_id]
+
+
+# ──────────────────────────────────────────────
+# TRACKING INVITAȚII
+# ──────────────────────────────────────────────
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    # Rol Unverified
+    rol_unverified = discord.utils.get(member.guild.roles, name=ROL_UNVERIFIED)
+    if rol_unverified:
+        await member.add_roles(rol_unverified, reason="Rol implicit la intrare")
+
+    # Welcome
+    canal = bot.get_channel(CANAL_WELCOME_ID)
+    if canal:
+        embed = discord.Embed(
+            title="👋 Membru nou!",
+            description=f"Bun venit pe server, {member.mention}!\n\nMergi în <#{CANAL_VERIFICARE_ID}> pentru a obține acces.",
+            color=0x57F287
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Membri: {member.guild.member_count}")
+        await canal.send(embed=embed)
+
+    # Detectăm prin ce invitație a intrat pentru giveaway
+    try:
+        invites_after = await member.guild.invites()
+        for code, inviter_id in list(invite_tracker.items()):
+            invite_obj = next((i for i in invites_after if i.code == code), None)
+            # Dacă invitația nu mai apare sau uses a crescut
+            if invite_obj is None:
+                # A fost folosită și ștearsă — dar noi avem max_uses=0 deci nu se șterge
+                pass
+            # Marcăm în giveaway-urile active
+            for msg_id, data in giveaway_data.items():
+                if code in data.get("invite_codes", {}).values():
+                    if "invitati_de" not in data:
+                        data["invitati_de"] = {}
+                    data["invitati_de"][member.id] = inviter_id
+    except Exception:
+        pass
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    canal = bot.get_channel(CANAL_WELCOME_ID)
+    if canal:
+        embed = discord.Embed(title="🚪 Membru plecat", description=f"**{member.name}** a părăsit serverul.", color=0xED4245)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"Membri: {member.guild.member_count}")
+        await canal.send(embed=embed)
 
 
 # ──────────────────────────────────────────────
@@ -546,37 +727,6 @@ async def giveaway_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
         return
     await interaction.response.send_modal(GiveawayModal())
-
-
-# ──────────────────────────────────────────────
-# WELCOME / LEAVE
-# ──────────────────────────────────────────────
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    rol_unverified = discord.utils.get(member.guild.roles, name=ROL_UNVERIFIED)
-    if rol_unverified:
-        await member.add_roles(rol_unverified, reason="Rol implicit la intrare")
-    canal = bot.get_channel(CANAL_WELCOME_ID)
-    if canal:
-        embed = discord.Embed(
-            title="👋 Membru nou!",
-            description=f"Bun venit pe server, {member.mention}!\n\nMergi în <#{CANAL_VERIFICARE_ID}> pentru a obține acces.",
-            color=0x57F287
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text=f"Membri: {member.guild.member_count}")
-        await canal.send(embed=embed)
-
-
-@bot.event
-async def on_member_remove(member: discord.Member):
-    canal = bot.get_channel(CANAL_WELCOME_ID)
-    if canal:
-        embed = discord.Embed(title="🚪 Membru plecat", description=f"**{member.name}** a părăsit serverul.", color=0xED4245)
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text=f"Membri: {member.guild.member_count}")
-        await canal.send(embed=embed)
 
 
 # ──────────────────────────────────────────────
