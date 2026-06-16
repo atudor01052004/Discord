@@ -22,6 +22,7 @@ CANAL_FAQ_ID         = 1516063846702387360
 CANAL_TEPARI_ID      = 1516063981469437982
 CANAL_GIVEAWAY_ID    = 1513873592423682109
 CANAL_YOUTUBE_ID     = 1513873645485817938
+CANAL_MEMBRI_ID      = 1516433983817257190
 
 CANALE_MARKET = [
     1516062696293007410,
@@ -33,16 +34,26 @@ CANALE_MARKET = [
     1513873677223989248,
 ]
 
-SERVERE = {
-    "Romania":          "Romania",
-    "Tara Romaneasca":  "Tara Romaneasca",
-    "Sapphire [AZURE]": "Sapphire [AZURE]",
-    "Ruby [KIRIN]":     "Ruby [KIRIN]",
-    "Tigerghost":       "Tigerghost",
-    "Oceana":           "Oceana",
+SERVERE_METIN2 = {
+    "Romania":          "🗡️ Romania",
+    "Tara Romaneasca":  "🏰 Tara Romaneasca",
+    "Sapphire [AZURE]": "🔷 Sapphire [AZURE]",
+    "Ruby [KIRIN]":     "♦️ Ruby [KIRIN]",
+    "Tigerghost":       "👻 Tigerghost",
+    "Oceana":           "🌊 Oceana",
 }
 
-ROL_VERIFIED   = "Verified"
+JOCURI_GAMER = [
+    "🏆 League of Legends",
+    "🔫 Counter-Strike 2",
+    "🪓 Rust",
+    "🌀 Dota 2",
+    "🚗 GTA",
+]
+
+ROL_METIN2     = "⚔️ Metin2"
+ROL_GAMER      = "🎮 Gamer"
+ROL_VERIFIED   = "⭐ Verified"   # acordat când are ambele
 ROL_UNVERIFIED = "Unverified"
 ROLURI_STAFF   = ["Admin", "Moderator"]
 OWNER_ID       = 401451926681812993
@@ -53,17 +64,21 @@ ORA_END_CHECK   = 23
 INTERVAL_MINUTE = 5
 
 INVITE_DATA_FILE = "invite_data.json"
-CANAL_MEMBRI_ID  = 1516433983817257190
 
 # ──────────────────────────────────────────────
 # TEXTE
 # ──────────────────────────────────────────────
 
-MESAJ_VERIFICARE = (
-    "## 🏯 Bun venit pe server!\n\n"
-    "Pentru a obține acces, apasă butonul de mai jos și completează cele două câmpuri.\n"
-    "Durează mai puțin de un minut.\n\n"
-    "**Nu posta niciun mesaj în acest canal.**"
+MESAJ_VERIFICARE_METIN2 = (
+    "## ⚔️ Verificare Metin2\n\n"
+    "Ești jucător de Metin2? Apasă butonul de mai jos pentru a obține accesul la canalele de Metin2.\n\n"
+    "**Vei primi rolul:** `⚔️ Metin2`"
+)
+
+MESAJ_VERIFICARE_GAMER = (
+    "## 🎮 Verificare Gaming\n\n"
+    "Joci alte jocuri? Apasă butonul de mai jos pentru a obține accesul la canalele de gaming.\n\n"
+    "**Vei primi rolul:** `🎮 Gamer`"
 )
 
 REGULAMENT_TITLU = "📜 Regulament General"
@@ -131,19 +146,14 @@ tree = bot.tree
 
 giveaway_data = {}
 invite_tracker = {}
-# { invite_code: inviter_id }
-
 cached_invites = {}
-# { guild_id: { code: uses } } — snapshot al invitațiilor înainte de join
-
 youtube_channel_id_resolved = None
 live_anuntat = False
 
 
 # ──────────────────────────────────────────────
-# INVITE DATA PERSISTENT (JSON)
+# INVITE DATA PERSISTENT
 # ──────────────────────────────────────────────
-# Format: { "user_id": { "invites": int, "invited_by": user_id|null, "invited_users": [user_id] } }
 
 def load_invite_data() -> dict:
     try:
@@ -171,17 +181,13 @@ def add_invite(inviter_id: int, invited_id: int):
     data[key]["invites"] += 1
     if invited_id not in data[key]["invited_users"]:
         data[key]["invited_users"].append(invited_id)
-
-    # Marcăm de cine a fost invitat
     inv_key = str(invited_id)
     if inv_key not in data:
         data[inv_key] = {"invites": 0, "invited_by": None, "invited_users": []}
     data[inv_key]["invited_by"] = inviter_id
-
     save_invite_data(data)
 
 def remove_invite(invited_id: int):
-    """Scade invitația când userul invitat iese (drop protection)."""
     data = load_invite_data()
     inv_key = str(invited_id)
     inviter_id = data.get(inv_key, {}).get("invited_by")
@@ -220,6 +226,15 @@ async def trimite_odata(canal, titlu, text, culoare=0xE8B84B, imagine=None):
 
 def are_rol_staff(member: discord.Member) -> bool:
     return any(r.name in ROLURI_STAFF for r in member.roles)
+
+async def verifica_si_da_verified(member: discord.Member, guild: discord.Guild):
+    """Dacă userul are atât Metin2 cât și Gamer, îi dă Verified."""
+    role_names = [r.name for r in member.roles]
+    if ROL_METIN2 in role_names and ROL_GAMER in role_names:
+        rol_verified = discord.utils.get(guild.roles, name=ROL_VERIFIED)
+        if rol_verified and rol_verified not in member.roles:
+            await member.add_roles(rol_verified, reason="A completat ambele verificări")
+            print(f"✅ {member.name} a primit ⭐ Verified")
 
 async def get_youtube_channel_id(handle: str) -> str | None:
     url = (
@@ -335,7 +350,7 @@ async def verifica_membrii_giveaway():
                 data["pornit"] = True
                 data["end_time"] = datetime.utcnow() + timedelta(days=data["zile"])
                 asyncio.create_task(countdown_giveaway(msg_id, data["zile"] * 86400))
-                print(f"✅ Giveaway {msg_id} pornit — s-au atins {data['membri_minim']} membri")
+                print(f"✅ Giveaway {msg_id} pornit")
             try:
                 msg = await canal.fetch_message(msg_id)
                 await msg.edit(embed=embed_giveaway(data, guild))
@@ -362,10 +377,10 @@ async def update_member_counter():
 
 
 # ──────────────────────────────────────────────
-# VERIFICARE — Modal + Dropdown
+# VERIFICARE METIN2 — Modal + Dropdown
 # ──────────────────────────────────────────────
 
-class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
+class NicknameMetin2Modal(discord.ui.Modal, title="Verificare Metin2"):
     nickname = discord.ui.TextInput(
         label="Nickname ingame",
         placeholder="ex: FireX3D",
@@ -381,24 +396,24 @@ class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
         guild  = interaction.guild
         member = interaction.user
 
-        rol_verified = discord.utils.get(guild.roles, name=ROL_VERIFIED)
-        if not rol_verified:
-            await interaction.response.send_message("⚠️ Rolul Verified nu a fost găsit. Contactează un admin.", ephemeral=True)
+        rol_metin2 = discord.utils.get(guild.roles, name=ROL_METIN2)
+        if not rol_metin2:
+            await interaction.response.send_message("⚠️ Rolul Metin2 nu a fost găsit. Contactează un admin.", ephemeral=True)
             return
 
-        nume_rol_server = SERVERE.get(self.server_ales)
+        nume_rol_server = SERVERE_METIN2.get(self.server_ales)
         rol_server = discord.utils.get(guild.roles, name=nume_rol_server) if nume_rol_server else None
 
         nick_nou = f"{member.name} | {self.nickname.value.strip()}"
         if len(nick_nou) > 32:
             nick_nou = nick_nou[:32]
 
-        roluri_de_dat = [rol_verified]
+        roluri_de_dat = [rol_metin2]
         if rol_server:
             roluri_de_dat.append(rol_server)
 
         try:
-            await member.add_roles(*roluri_de_dat, reason="Verificare completată")
+            await member.add_roles(*roluri_de_dat, reason="Verificare Metin2 completată")
             rol_unverified = discord.utils.get(guild.roles, name=ROL_UNVERIFIED)
             if rol_unverified and rol_unverified in member.roles:
                 await member.remove_roles(rol_unverified, reason="Verificare completată")
@@ -407,12 +422,13 @@ class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
             except discord.Forbidden:
                 pass
         except discord.Forbidden:
-            await interaction.response.send_message("⚠️ Nu am permisiuni suficiente. Contactează un admin.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Nu am permisiuni suficiente.", ephemeral=True)
             return
 
-        await interaction.response.send_message("✅ Verificare completată! Ai primit accesul la server.", ephemeral=True)
+        await verifica_si_da_verified(member, guild)
+        await interaction.response.send_message("✅ Verificare Metin2 completată!", ephemeral=True)
 
-        roluri_text = ROL_VERIFIED + (f" + {nume_rol_server}" if rol_server else "")
+        roluri_text = ROL_METIN2 + (f" + {nume_rol_server}" if rol_server else "")
         embed = discord.Embed(
             title="🏯 Bun venit în comunitate!",
             description=(
@@ -420,9 +436,8 @@ class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
                 f"🎮 **Server:** {self.server_ales}\n"
                 f"⚔️ **Nickname ingame:** {self.nickname.value.strip()}\n"
                 f"🏷️ **Roluri primite:** {roluri_text}\n\n"
-                f"Acum ai acces complet la server. Ne vedem pe câmpul de luptă!\n\n"
-                f"Mulțumim că te-ai alăturat comunității, sperăm să te simți bine! "
-                f"Pentru orice problemă poți contacta un Administrator sau un Moderator."
+                f"Acum ai acces la canalele de Metin2. Ne vedem pe câmpul de luptă!\n\n"
+                f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
             ),
             color=0xE8B84B
         )
@@ -433,39 +448,124 @@ class NicknameModal(discord.ui.Modal, title="Un ultim pas"):
             pass
 
 
-class ServerDropdown(discord.ui.Select):
+class ServerMetin2Dropdown(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=s, value=s) for s in SERVERE]
+        options = [discord.SelectOption(label=s, value=s) for s in SERVERE_METIN2]
         super().__init__(
             placeholder="Alege serverul pe care joci...",
             min_values=1, max_values=1,
             options=options,
-            custom_id="server_select"
+            custom_id="server_metin2_select"
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(NicknameModal(self.values[0]))
+        await interaction.response.send_modal(NicknameMetin2Modal(self.values[0]))
 
 
-class DropdownView(discord.ui.View):
+class DropdownMetin2View(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(ServerDropdown())
+        self.add_item(ServerMetin2Dropdown())
 
 
-class VerificareView(discord.ui.View):
+class VerificareMetin2View(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Începe verificarea", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="verificare_btn")
+    @discord.ui.button(label="Verificare Metin2", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="verificare_metin2_btn")
     async def verificare_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        rol = discord.utils.get(interaction.guild.roles, name=ROL_VERIFIED)
+        rol = discord.utils.get(interaction.guild.roles, name=ROL_METIN2)
         if rol and rol in interaction.user.roles:
-            await interaction.response.send_message("✅ Ești deja verificat!", ephemeral=True)
+            await interaction.response.send_message("✅ Ești deja verificat ca jucător Metin2!", ephemeral=True)
             return
         await interaction.response.send_message(
-            "## ⚔️ Pasul 1 — Alege serverul\n\nPe ce server Metin2 joci?",
-            view=DropdownView(), ephemeral=True
+            "## ⚔️ Alege serverul Metin2\n\nPe ce server joci?",
+            view=DropdownMetin2View(), ephemeral=True
+        )
+
+
+# ──────────────────────────────────────────────
+# VERIFICARE GAMER — Dropdown jocuri
+# ──────────────────────────────────────────────
+
+class JocDropdown(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=j, value=j) for j in JOCURI_GAMER]
+        super().__init__(
+            placeholder="Alege jocul tău principal...",
+            min_values=1, max_values=1,
+            options=options,
+            custom_id="joc_select"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        guild  = interaction.guild
+        member = interaction.user
+        joc_ales = self.values[0]
+
+        rol_gamer = discord.utils.get(guild.roles, name=ROL_GAMER)
+        rol_joc   = discord.utils.get(guild.roles, name=joc_ales)
+
+        if not rol_gamer:
+            await interaction.response.send_message("⚠️ Rolul Gamer nu a fost găsit. Contactează un admin.", ephemeral=True)
+            return
+
+        roluri_de_dat = [rol_gamer]
+        if rol_joc:
+            roluri_de_dat.append(rol_joc)
+
+        try:
+            await member.add_roles(*roluri_de_dat, reason="Verificare Gamer completată")
+            rol_unverified = discord.utils.get(guild.roles, name=ROL_UNVERIFIED)
+            if rol_unverified and rol_unverified in member.roles:
+                await member.remove_roles(rol_unverified, reason="Verificare completată")
+        except discord.Forbidden:
+            await interaction.response.send_message("⚠️ Nu am permisiuni suficiente.", ephemeral=True)
+            return
+
+        await verifica_si_da_verified(member, guild)
+        await interaction.response.send_message(
+            f"✅ Ai primit rolul **{ROL_GAMER}** + **{joc_ales}**!",
+            ephemeral=True
+        )
+
+        embed_dm = discord.Embed(
+            title="🎮 Bun venit în comunitate!",
+            description=(
+                f"Salut, **{member.display_name}**!\n\n"
+                f"🎮 **Joc:** {joc_ales}\n"
+                f"🏷️ **Roluri primite:** {ROL_GAMER} + {joc_ales}\n\n"
+                f"Acum ai acces la canalele de gaming!\n\n"
+                f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
+            ),
+            color=0x2ECC71
+        )
+        embed_dm.set_footer(text="Hydra Prestige • Community")
+        try:
+            await member.send(embed=embed_dm)
+        except discord.Forbidden:
+            pass
+
+
+class DropdownGamerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(JocDropdown())
+
+
+class VerificareGamerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verificare Gaming", style=discord.ButtonStyle.success, emoji="🎮", custom_id="verificare_gamer_btn")
+    async def verificare_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rol = discord.utils.get(interaction.guild.roles, name=ROL_GAMER)
+        if rol and rol in interaction.user.roles:
+            await interaction.response.send_message("✅ Ești deja verificat ca Gamer!", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "## 🎮 Alege jocul tău principal",
+            view=DropdownGamerView(), ephemeral=True
         )
 
 
@@ -484,7 +584,7 @@ class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
     )
     conditii = discord.ui.TextInput(
         label="Condiții și detalii",
-        placeholder="ex: Subscribe YouTube: https://...\nFollow Instagram: https://...\n1 invitație = 1 șansă extra!",
+        placeholder="ex: Subscribe YouTube: https://...\nFollow Instagram: https://...",
         required=False,
         max_length=1000,
         style=discord.TextStyle.paragraph
@@ -632,7 +732,7 @@ async def countdown_giveaway(msg_id: int, secunde: int):
         return
     participanti = list(data["participanti"])
     if not participanti:
-        await canal.send("🎉 Giveaway-ul s-a încheiat dar nu a existat niciun participant. Mai încercați data viitoare!")
+        await canal.send("🎉 Giveaway-ul s-a încheiat dar nu a existat niciun participant.")
         del giveaway_data[msg_id]
         return
 
@@ -669,12 +769,10 @@ async def countdown_giveaway(msg_id: int, secunde: int):
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    # Rol Unverified
     rol_unverified = discord.utils.get(member.guild.roles, name=ROL_UNVERIFIED)
     if rol_unverified:
         await member.add_roles(rol_unverified, reason="Rol implicit la intrare")
 
-    # Detectăm invitația folosită
     inviter = None
     inviter_count = 0
     try:
@@ -684,13 +782,10 @@ async def on_member_join(member: discord.Member):
         for invite in invites_after:
             uses_before = invites_before.get(invite.code, 0)
             if invite.uses > uses_before:
-                # Această invitație a fost folosită
                 if invite.inviter:
                     inviter = invite.inviter
                     add_invite(inviter.id, member.id)
                     inviter_count = get_invite_count(inviter.id)
-
-                    # Tracking pentru giveaway
                     if invite.code in invite_tracker:
                         for msg_id, data in giveaway_data.items():
                             if invite.code in data.get("invite_codes", {}).values():
@@ -699,13 +794,11 @@ async def on_member_join(member: discord.Member):
                                 data["invitati_de"][member.id] = invite_tracker[invite.code]
                 break
 
-        # Actualizăm cache-ul
         cached_invites[member.guild.id] = {i.code: i.uses for i in invites_after}
 
     except Exception as e:
         print(f"⚠️  Eroare invite tracking: {e}")
 
-    # Welcome embed
     canal = bot.get_channel(CANAL_WELCOME_ID)
     if canal:
         if inviter:
@@ -729,7 +822,6 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    # Drop protection — scădem invitația
     inviter_id = remove_invite(member.id)
 
     canal = bot.get_channel(CANAL_WELCOME_ID)
@@ -745,7 +837,6 @@ async def on_member_remove(member: discord.Member):
         embed.set_footer(text=f"Membri: {member.guild.member_count}")
         await canal.send(embed=embed)
 
-    # Actualizăm cache invitații
     try:
         invites = await member.guild.invites()
         cached_invites[member.guild.id] = {i.code: i.uses for i in invites}
@@ -754,14 +845,14 @@ async def on_member_remove(member: discord.Member):
 
 
 # ──────────────────────────────────────────────
-# COMENZI MODERARE
+# COMENZI
 # ──────────────────────────────────────────────
 
 @tree.command(name="mute", description="Dezactivează scrisul unui membru")
 @app_commands.describe(membru="Membrul de mutat", motiv="Motivul")
 async def mute(interaction: discord.Interaction, membru: discord.Member, motiv: str = "Nespecificat"):
     if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
     try:
         await membru.edit(mute=True)
@@ -776,7 +867,7 @@ async def mute(interaction: discord.Interaction, membru: discord.Member, motiv: 
 @app_commands.describe(membru="Membrul", minute="Durata în minute", motiv="Motivul")
 async def timeout_cmd(interaction: discord.Interaction, membru: discord.Member, minute: int, motiv: str = "Nespecificat"):
     if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
     try:
         await membru.timeout(timedelta(minutes=minute), reason=motiv)
@@ -791,7 +882,7 @@ async def timeout_cmd(interaction: discord.Interaction, membru: discord.Member, 
 @app_commands.describe(membru="Membrul", motiv="Motivul")
 async def kick(interaction: discord.Interaction, membru: discord.Member, motiv: str = "Nespecificat"):
     if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
     try:
         await membru.kick(reason=motiv)
@@ -806,7 +897,7 @@ async def kick(interaction: discord.Interaction, membru: discord.Member, motiv: 
 @app_commands.describe(membru="Membrul", motiv="Motivul")
 async def ban(interaction: discord.Interaction, membru: discord.Member, motiv: str = "Nespecificat"):
     if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
     try:
         await membru.ban(reason=motiv)
@@ -817,11 +908,19 @@ async def ban(interaction: discord.Interaction, membru: discord.Member, motiv: s
         await interaction.response.send_message("❌ Nu am permisiuni suficiente.", ephemeral=True)
 
 
+@tree.command(name="giveaway", description="Creează un giveaway")
+async def giveaway_cmd(interaction: discord.Interaction):
+    if not are_rol_staff(interaction.user):
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
+        return
+    await interaction.response.send_modal(GiveawayModal())
+
+
 @tree.command(name="anuleaza-giveaway", description="Anulează un giveaway activ")
 @app_commands.describe(message_id="ID-ul mesajului giveaway-ului")
 async def anuleaza_giveaway(interaction: discord.Interaction, message_id: str):
     if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
     try:
         msg_id = int(message_id.strip())
@@ -836,14 +935,12 @@ async def anuleaza_giveaway(interaction: discord.Interaction, message_id: str):
     data = giveaway_data[msg_id]
     canal = bot.get_channel(data["canal_id"])
 
-    # Ștergem mesajul giveaway-ului
     try:
         msg = await canal.fetch_message(msg_id)
         await msg.delete()
     except Exception:
         pass
 
-    # Anunțăm anularea
     embed = discord.Embed(
         title="❌ Giveaway anulat",
         description=f"Giveaway-ul pentru **{data['premiu']}** a fost anulat de {interaction.user.mention}.",
@@ -851,17 +948,8 @@ async def anuleaza_giveaway(interaction: discord.Interaction, message_id: str):
     )
     embed.set_footer(text="Hydra Prestige • Metin2 Community")
     await canal.send(embed=embed)
-
     del giveaway_data[msg_id]
     await interaction.response.send_message("✅ Giveaway anulat cu succes.", ephemeral=True)
-
-
-@tree.command(name="giveaway", description="Creează un giveaway")
-async def giveaway_cmd(interaction: discord.Interaction):
-    if not are_rol_staff(interaction.user):
-        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
-        return
-    await interaction.response.send_modal(GiveawayModal())
 
 
 @tree.command(name="invitatii", description="Vezi câte invitații ai adus pe server")
@@ -888,7 +976,6 @@ async def on_ready():
     global youtube_channel_id_resolved
     print(f"✅ Bot pornit ca {bot.user}")
 
-    # DM către owner
     try:
         guild = bot.guilds[0]
         owner = guild.get_member(OWNER_ID)
@@ -897,14 +984,15 @@ async def on_ready():
     except Exception:
         pass
 
-    bot.add_view(VerificareView())
-    bot.add_view(DropdownView())
+    bot.add_view(VerificareMetin2View())
+    bot.add_view(DropdownMetin2View())
+    bot.add_view(VerificareGamerView())
+    bot.add_view(DropdownGamerView())
     bot.add_view(GiveawayView())
 
     await tree.sync()
     print("✅ Slash commands sincronizate")
 
-    # Cache invitații la pornire
     for guild in bot.guilds:
         try:
             invites = await guild.invites()
@@ -926,19 +1014,43 @@ async def on_ready():
     else:
         print("⚠️  YOUTUBE_API_KEY lipsă")
 
+    # Trimitem cele 2 embeds în #get-started
     canal_vs = bot.get_channel(CANAL_VERIFICARE_ID)
     if canal_vs:
-        mesaj_existent = None
+        # Ștergem mesajele vechi ale botului
         async for msg in canal_vs.history(limit=20):
-            if msg.author == bot.user and msg.components:
-                mesaj_existent = msg
-                break
-        if mesaj_existent:
-            await mesaj_existent.edit(content=MESAJ_VERIFICARE, view=VerificareView())
-            print(f"✅ Mesaj actualizat în #{canal_vs.name}")
-        else:
-            await canal_vs.send(content=MESAJ_VERIFICARE, view=VerificareView())
-            print(f"✅ Mesaj trimis în #{canal_vs.name}")
+            if msg.author == bot.user:
+                try:
+                    await msg.delete()
+                except Exception:
+                    pass
+
+        # Embed Metin2
+        embed_metin2 = discord.Embed(
+            title="⚔️ Verificare Metin2",
+            description=(
+                "Ești jucător de **Metin2**? Apasă butonul de mai jos pentru a obține "
+                "accesul la canalele de Metin2.\n\n"
+                "**Vei primi:** `⚔️ Metin2` + rolul serverului tău"
+            ),
+            color=0xE8B84B
+        )
+        embed_metin2.set_footer(text="Hydra Prestige • Metin2 Community")
+        await canal_vs.send(embed=embed_metin2, view=VerificareMetin2View())
+
+        # Embed Gaming
+        embed_gaming = discord.Embed(
+            title="🎮 Verificare Gaming",
+            description=(
+                "Joci **alte jocuri**? Apasă butonul de mai jos pentru a obține "
+                "accesul la canalele de gaming.\n\n"
+                "**Vei primi:** `🎮 Gamer` + rolul jocului tău"
+            ),
+            color=0x2ECC71
+        )
+        embed_gaming.set_footer(text="Hydra Prestige • Community")
+        await canal_vs.send(embed=embed_gaming, view=VerificareGamerView())
+        print(f"✅ Embeds trimise în #{canal_vs.name}")
 
     canal = bot.get_channel(CANAL_REGULAMENT_ID)
     if canal:
