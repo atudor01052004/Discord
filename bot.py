@@ -418,6 +418,8 @@ class NicknameMetin2Modal(discord.ui.Modal, title="Verificare Metin2"):
         if rol_server:
             roluri_de_dat.append(rol_server)
 
+        primul_metin2 = rol_metin2 not in member.roles  # verificăm ÎNAINTE de add_roles
+
         try:
             await member.add_roles(*roluri_de_dat, reason="Verificare Metin2 completată")
             rol_unverified = discord.utils.get(guild.roles, name=ROL_UNVERIFIED)
@@ -434,24 +436,26 @@ class NicknameMetin2Modal(discord.ui.Modal, title="Verificare Metin2"):
         await verifica_si_da_verified(member, guild)
         await interaction.response.send_message("✅ Verificare Metin2 completată!", ephemeral=True)
 
-        roluri_text = ROL_METIN2 + (f" + {nume_rol_server}" if rol_server else "")
-        embed = discord.Embed(
-            title="🏯 Bun venit în comunitate!",
-            description=(
-                f"Salut, **{nick_nou}**!\n\n"
-                f"🎮 **Server:** {self.server_ales}\n"
-                f"⚔️ **Nickname ingame:** {self.nickname.value.strip()}\n"
-                f"🏷️ **Roluri primite:** {roluri_text}\n\n"
-                f"Acum ai acces la canalele de Metin2. Ne vedem pe câmpul de luptă!\n\n"
-                f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
-            ),
-            color=0xE8B84B
-        )
-        embed.set_footer(text="Metin2 Community • Hydra Prestige")
-        try:
-            await member.send(embed=embed)
-        except discord.Forbidden:
-            pass
+        # DM doar la prima obținere a rolului Metin2
+        if primul_metin2:
+            roluri_text = ROL_METIN2 + (f" + {nume_rol_server}" if rol_server else "")
+            embed = discord.Embed(
+                title="🏯 Bun venit în comunitate!",
+                description=(
+                    f"Salut, **{nick_nou}**!\n\n"
+                    f"🎮 **Server:** {self.server_ales}\n"
+                    f"⚔️ **Nickname ingame:** {self.nickname.value.strip()}\n"
+                    f"🏷️ **Roluri primite:** {roluri_text}\n\n"
+                    f"Acum ai acces la canalele de Metin2. Ne vedem pe câmpul de luptă!\n\n"
+                    f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
+                ),
+                color=0xE8B84B
+            )
+            embed.set_footer(text="Metin2 Community • Hydra Prestige")
+            try:
+                await member.send(embed=embed)
+            except discord.Forbidden:
+                pass
 
 
 class ServerMetin2Dropdown(discord.ui.Select):
@@ -474,6 +478,71 @@ class DropdownMetin2View(discord.ui.View):
         self.add_item(ServerMetin2Dropdown())
 
 
+class ServerMetin2ToggleDropdown(discord.ui.Select):
+    """Dropdown pentru schimbarea serverelor Metin2 — toggle add/remove."""
+    def __init__(self, member_role_names: list):
+        options = []
+        for display, rol_name in SERVERE_METIN2.items():
+            are_rol = rol_name in member_role_names
+            options.append(discord.SelectOption(
+                label=display,
+                value=display,
+                emoji="✅" if are_rol else "➕",
+                description="Apasă să scoți" if are_rol else "Apasă să adaugi"
+            ))
+        super().__init__(
+            placeholder="Alege serverele tale...",
+            min_values=0, max_values=len(SERVERE_METIN2),
+            options=options,
+            custom_id="server_metin2_toggle_select"
+        )
+        self.member_role_names = member_role_names
+
+    async def callback(self, interaction: discord.Interaction):
+        guild  = interaction.guild
+        member = interaction.user
+        selectate = set(self.values)
+
+        roluri_de_adaugat = []
+        roluri_de_scos = []
+
+        for display, rol_name in SERVERE_METIN2.items():
+            rol = discord.utils.get(guild.roles, name=rol_name)
+            if not rol:
+                continue
+            are_rol = rol_name in self.member_role_names
+            vrea_rol = display in selectate
+
+            if vrea_rol and not are_rol:
+                roluri_de_adaugat.append(rol)
+            elif not vrea_rol and are_rol:
+                roluri_de_scos.append(rol)
+
+        if roluri_de_adaugat:
+            await member.add_roles(*roluri_de_adaugat, reason="Schimbare server Metin2")
+        if roluri_de_scos:
+            await member.remove_roles(*roluri_de_scos, reason="Schimbare server Metin2")
+
+        # Dacă nu mai are niciun server Metin2, scoatem și rolul Metin2 și Verified
+        await asyncio.sleep(1)
+        member = await guild.fetch_member(member.id)
+        role_names_now = [r.name for r in member.roles]
+        are_server_metin2 = any(rn in role_names_now for rn in SERVERE_METIN2.values())
+
+        if not are_server_metin2:
+            rol_metin2 = discord.utils.get(guild.roles, name=ROL_METIN2)
+            rol_verified = discord.utils.get(guild.roles, name=ROL_VERIFIED)
+            to_remove = []
+            if rol_metin2 and rol_metin2 in member.roles:
+                to_remove.append(rol_metin2)
+            if rol_verified and rol_verified in member.roles:
+                to_remove.append(rol_verified)
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Niciun server Metin2 selectat")
+
+        await interaction.response.send_message("✅ Rolurile de server au fost actualizate!", ephemeral=True)
+
+
 class VerificareMetin2View(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -481,8 +550,16 @@ class VerificareMetin2View(discord.ui.View):
     @discord.ui.button(label="Verificare Metin2", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="verificare_metin2_btn")
     async def verificare_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         rol = discord.utils.get(interaction.guild.roles, name=ROL_METIN2)
+        member_role_names = [r.name for r in interaction.user.roles]
+
         if rol and rol in interaction.user.roles:
-            await interaction.response.send_message("✅ Ești deja verificat ca jucător Metin2!", ephemeral=True)
+            # Are deja Metin2 — toggle dropdown
+            view = discord.ui.View(timeout=120)
+            view.add_item(ServerMetin2ToggleDropdown(member_role_names))
+            await interaction.response.send_message(
+                "## ⚔️ Gestionează serverele Metin2\n\n✅ = ai rolul | ➕ = nu ai rolul\nSelectează serverele dorite:",
+                view=view, ephemeral=True
+            )
             return
         await interaction.response.send_message(
             "## ⚔️ Alege serverul Metin2\n\nPe ce server joci?",
@@ -510,6 +587,7 @@ class JocDropdown(discord.ui.Select):
         jocuri_alese = self.values
 
         rol_gamer = discord.utils.get(guild.roles, name=ROL_GAMER)
+        primul_gamer = rol_gamer not in member.roles  # verificăm ÎNAINTE de add_roles
 
         if not rol_gamer:
             await interaction.response.send_message("⚠️ Rolul Gamer nu a fost găsit. Contactează un admin.", ephemeral=True)
@@ -538,28 +616,98 @@ class JocDropdown(discord.ui.Select):
             ephemeral=True
         )
 
-        embed_dm = discord.Embed(
-            title="🎮 Bun venit în comunitate!",
-            description=(
-                f"Salut, **{member.display_name}**!\n\n"
-                f"🎮 **Jocuri:** {jocuri_text}\n"
-                f"🏷️ **Roluri primite:** {ROL_GAMER} + {jocuri_text}\n\n"
-                f"Acum ai acces la canalele de gaming!\n\n"
-                f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
-            ),
-            color=0x2ECC71
-        )
-        embed_dm.set_footer(text="Hydra Prestige • Community")
-        try:
-            await member.send(embed=embed_dm)
-        except discord.Forbidden:
-            pass
+        # DM doar la prima obținere a rolului Gamer
+        if primul_gamer:
+            embed_dm = discord.Embed(
+                title="🎮 Bun venit în comunitate!",
+                description=(
+                    f"Salut, **{member.display_name}**!\n\n"
+                    f"🎮 **Jocuri:** {jocuri_text}\n"
+                    f"🏷️ **Roluri primite:** {ROL_GAMER} + {jocuri_text}\n\n"
+                    f"Acum ai acces la canalele de gaming!\n\n"
+                    f"Mulțumim că te-ai alăturat comunității! Pentru orice problemă contactează un Admin sau Moderator."
+                ),
+                color=0x2ECC71
+            )
+            embed_dm.set_footer(text="Hydra Prestige • Community")
+            try:
+                await member.send(embed=embed_dm)
+            except discord.Forbidden:
+                pass
 
 
 class DropdownGamerView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(JocDropdown())
+
+
+class JocToggleDropdown(discord.ui.Select):
+    """Dropdown pentru schimbarea jocurilor — toggle add/remove."""
+    def __init__(self, member_role_names: list):
+        options = []
+        for joc in JOCURI_GAMER:
+            are_rol = joc in member_role_names
+            options.append(discord.SelectOption(
+                label=joc,
+                value=joc,
+                emoji="✅" if are_rol else "➕",
+                description="Apasă să scoți" if are_rol else "Apasă să adaugi"
+            ))
+        super().__init__(
+            placeholder="Alege jocurile tale...",
+            min_values=0, max_values=len(JOCURI_GAMER),
+            options=options,
+            custom_id="joc_toggle_select"
+        )
+        self.member_role_names = member_role_names
+
+    async def callback(self, interaction: discord.Interaction):
+        guild  = interaction.guild
+        member = interaction.user
+        selectate = set(self.values)
+
+        roluri_de_adaugat = []
+        roluri_de_scos = []
+
+        for joc in JOCURI_GAMER:
+            rol = discord.utils.get(guild.roles, name=joc)
+            if not rol:
+                continue
+            are_rol = joc in self.member_role_names
+            vrea_rol = joc in selectate
+
+            if vrea_rol and not are_rol:
+                roluri_de_adaugat.append(rol)
+            elif not vrea_rol and are_rol:
+                roluri_de_scos.append(rol)
+
+        if roluri_de_adaugat:
+            await member.add_roles(*roluri_de_adaugat, reason="Schimbare jocuri")
+        if roluri_de_scos:
+            await member.remove_roles(*roluri_de_scos, reason="Schimbare jocuri")
+
+        # Dacă nu mai are niciun joc, scoatem și Gamer și Verified
+        await asyncio.sleep(1)
+        member = await guild.fetch_member(member.id)
+        role_names_now = [r.name for r in member.roles]
+        are_joc = any(j in role_names_now for j in JOCURI_GAMER)
+
+        if not are_joc:
+            rol_gamer = discord.utils.get(guild.roles, name=ROL_GAMER)
+            rol_verified = discord.utils.get(guild.roles, name=ROL_VERIFIED)
+            to_remove = []
+            if rol_gamer and rol_gamer in member.roles:
+                to_remove.append(rol_gamer)
+            if rol_verified and rol_verified in member.roles:
+                to_remove.append(rol_verified)
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Niciun joc selectat")
+        else:
+            # Are jocuri — verificăm dacă trebuie dat Verified
+            await verifica_si_da_verified(member, guild)
+
+        await interaction.response.send_message("✅ Rolurile de jocuri au fost actualizate!", ephemeral=True)
 
 
 class VerificareGamerView(discord.ui.View):
@@ -569,11 +717,19 @@ class VerificareGamerView(discord.ui.View):
     @discord.ui.button(label="Verificare Gaming", style=discord.ButtonStyle.success, emoji="🎮", custom_id="verificare_gamer_btn")
     async def verificare_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         rol = discord.utils.get(interaction.guild.roles, name=ROL_GAMER)
+        member_role_names = [r.name for r in interaction.user.roles]
+
         if rol and rol in interaction.user.roles:
-            await interaction.response.send_message("✅ Ești deja verificat ca Gamer!", ephemeral=True)
+            # Are deja Gamer — toggle dropdown
+            view = discord.ui.View(timeout=120)
+            view.add_item(JocToggleDropdown(member_role_names))
+            await interaction.response.send_message(
+                "## 🎮 Gestionează jocurile tale\n\n✅ = ai rolul | ➕ = nu ai rolul\nSelectează jocurile dorite:",
+                view=view, ephemeral=True
+            )
             return
         await interaction.response.send_message(
-            "## 🎮 Alege jocul tău principal",
+            "## 🎮 Alege jocul/jocurile tale",
             view=DropdownGamerView(), ephemeral=True
         )
 
