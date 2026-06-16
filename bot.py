@@ -53,6 +53,7 @@ ORA_END_CHECK   = 23
 INTERVAL_MINUTE = 5
 
 INVITE_DATA_FILE = "invite_data.json"
+CANAL_MEMBRI_ID  = 1516433983817257190
 
 # ──────────────────────────────────────────────
 # TEXTE
@@ -340,6 +341,24 @@ async def verifica_membrii_giveaway():
                 await msg.edit(embed=embed_giveaway(data, guild))
             except Exception:
                 pass
+
+
+# ──────────────────────────────────────────────
+# TASK COUNTER MEMBRI
+# ──────────────────────────────────────────────
+
+@tasks.loop(minutes=1)
+async def update_member_counter():
+    canal = bot.get_channel(CANAL_MEMBRI_ID)
+    if not canal:
+        return
+    guild = canal.guild
+    nou_nume = f"👥 𝗺𝗲𝗺𝗯𝗿𝗶𝗶: {guild.member_count}"
+    if canal.name != nou_nume:
+        try:
+            await canal.edit(name=nou_nume)
+        except Exception as e:
+            print(f"⚠️  Eroare update counter membri: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -798,6 +817,45 @@ async def ban(interaction: discord.Interaction, membru: discord.Member, motiv: s
         await interaction.response.send_message("❌ Nu am permisiuni suficiente.", ephemeral=True)
 
 
+@tree.command(name="anuleaza-giveaway", description="Anulează un giveaway activ")
+@app_commands.describe(message_id="ID-ul mesajului giveaway-ului")
+async def anuleaza_giveaway(interaction: discord.Interaction, message_id: str):
+    if not are_rol_staff(interaction.user):
+        await interaction.response.send_message("❌ Nu ai permisiunea să folosești această comandă.", ephemeral=True)
+        return
+    try:
+        msg_id = int(message_id.strip())
+    except ValueError:
+        await interaction.response.send_message("❌ ID invalid.", ephemeral=True)
+        return
+
+    if msg_id not in giveaway_data:
+        await interaction.response.send_message("❌ Nu există niciun giveaway activ cu acest ID.", ephemeral=True)
+        return
+
+    data = giveaway_data[msg_id]
+    canal = bot.get_channel(data["canal_id"])
+
+    # Ștergem mesajul giveaway-ului
+    try:
+        msg = await canal.fetch_message(msg_id)
+        await msg.delete()
+    except Exception:
+        pass
+
+    # Anunțăm anularea
+    embed = discord.Embed(
+        title="❌ Giveaway anulat",
+        description=f"Giveaway-ul pentru **{data['premiu']}** a fost anulat de {interaction.user.mention}.",
+        color=0xED4245
+    )
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    await canal.send(embed=embed)
+
+    del giveaway_data[msg_id]
+    await interaction.response.send_message("✅ Giveaway anulat cu succes.", ephemeral=True)
+
+
 @tree.command(name="giveaway", description="Creează un giveaway")
 async def giveaway_cmd(interaction: discord.Interaction):
     if not are_rol_staff(interaction.user):
@@ -854,6 +912,9 @@ async def on_ready():
             print(f"✅ Cache invitații încărcat pentru {guild.name}")
         except Exception:
             pass
+
+    update_member_counter.start()
+    print("✅ Counter membri pornit")
 
     if YOUTUBE_API_KEY:
         youtube_channel_id_resolved = await get_youtube_channel_id(YOUTUBE_HANDLE)
