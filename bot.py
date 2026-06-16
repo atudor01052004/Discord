@@ -5,7 +5,9 @@ import os
 import asyncio
 import random
 import aiohttp
+import json
 from datetime import datetime, timedelta
+
 TOKEN = os.environ.get("DISCORD_TOKEN")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
@@ -43,11 +45,14 @@ SERVERE = {
 ROL_VERIFIED   = "Verified"
 ROL_UNVERIFIED = "Unverified"
 ROLURI_STAFF   = ["Admin", "Moderator"]
+OWNER_ID       = 401451926681812993
 
-YOUTUBE_HANDLE      = "Tenek13"
-ORA_START_CHECK     = 15
-ORA_END_CHECK       = 23
-INTERVAL_MINUTE     = 5
+YOUTUBE_HANDLE  = "Tenek13"
+ORA_START_CHECK = 15
+ORA_END_CHECK   = 23
+INTERVAL_MINUTE = 5
+
+INVITE_DATA_FILE = "invite_data.json"
 
 # ──────────────────────────────────────────────
 # TEXTE
@@ -124,14 +129,73 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 giveaway_data = {}
-# { msg_id: { participanti, premiu, end_time, youtube, instagram, tiktok, canal_id,
-#             membri_minim (int|None), pornit (bool), invite_codes: {user_id: code} } }
-
 invite_tracker = {}
-# { invite_code: user_id } — cine a creat fiecare invitație
+# { invite_code: inviter_id }
+
+cached_invites = {}
+# { guild_id: { code: uses } } — snapshot al invitațiilor înainte de join
 
 youtube_channel_id_resolved = None
 live_anuntat = False
+
+
+# ──────────────────────────────────────────────
+# INVITE DATA PERSISTENT (JSON)
+# ──────────────────────────────────────────────
+# Format: { "user_id": { "invites": int, "invited_by": user_id|null, "invited_users": [user_id] } }
+
+def load_invite_data() -> dict:
+    try:
+        with open(INVITE_DATA_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_invite_data(data: dict):
+    try:
+        with open(INVITE_DATA_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"⚠️  Eroare la salvarea invite_data: {e}")
+
+def get_invite_count(user_id: int) -> int:
+    data = load_invite_data()
+    return data.get(str(user_id), {}).get("invites", 0)
+
+def add_invite(inviter_id: int, invited_id: int):
+    data = load_invite_data()
+    key = str(inviter_id)
+    if key not in data:
+        data[key] = {"invites": 0, "invited_by": None, "invited_users": []}
+    data[key]["invites"] += 1
+    if invited_id not in data[key]["invited_users"]:
+        data[key]["invited_users"].append(invited_id)
+
+    # Marcăm de cine a fost invitat
+    inv_key = str(invited_id)
+    if inv_key not in data:
+        data[inv_key] = {"invites": 0, "invited_by": None, "invited_users": []}
+    data[inv_key]["invited_by"] = inviter_id
+
+    save_invite_data(data)
+
+def remove_invite(invited_id: int):
+    """Scade invitația când userul invitat iese (drop protection)."""
+    data = load_invite_data()
+    inv_key = str(invited_id)
+    inviter_id = data.get(inv_key, {}).get("invited_by")
+    if inviter_id:
+        key = str(inviter_id)
+        if key in data and data[key]["invites"] > 0:
+            data[key]["invites"] -= 1
+            if invited_id in data[key]["invited_users"]:
+                data[key]["invited_users"].remove(invited_id)
+        save_invite_data(data)
+    return inviter_id
+
+def get_inviter(user_id: int):
+    data = load_invite_data()
+    return data.get(str(user_id), {}).get("invited_by")
 
 
 # ──────────────────────────────────────────────
@@ -191,7 +255,6 @@ async def check_live(channel_id: str) -> dict | None:
     return None
 
 async def genereaza_invite(guild: discord.Guild) -> discord.Invite | None:
-    """Generează un link de invitație unic — expire never, unlimited uses."""
     canal = guild.get_channel(CANAL_VERIFICARE_ID)
     if not canal:
         return None
@@ -202,38 +265,25 @@ async def genereaza_invite(guild: discord.Guild) -> discord.Invite | None:
         return None
 
 def embed_giveaway(data: dict, guild: discord.Guild) -> discord.Embed:
-    """Construiește embed-ul giveaway-ului cu contor de membri dacă e cazul."""
-    taskuri = []
-    if data.get("youtube"):
-        taskuri.append(f"[📺 Subscribe pe YouTube]({data['youtube']})")
-    if data.get("instagram"):
-        taskuri.append(f"[📸 Follow pe Instagram]({data['instagram']})")
-    if data.get("tiktok"):
-        taskuri.append(f"[🎵 Follow pe TikTok]({data['tiktok']})")
-    taskuri_text = "\n".join(taskuri) if taskuri else "Nicio condiție — participare liberă!"
-
+    conditii_text = data.get("conditii", "").strip() or "Nicio condiție — participare liberă!"
     membri_minim = data.get("membri_minim")
     membri_actuali = guild.member_count if guild else 0
 
     if membri_minim and not data.get("pornit"):
         status = f"⏳ Așteptăm **{membri_actuali}/{membri_minim}** membri pentru a porni countdown-ul"
-        end_text = "Countdown pornește când se atinge numărul de membri"
     else:
         timestamp = int(data["end_time"].timestamp())
         status = f"**⏰ Extragere:** <t:{timestamp}:F>\n**⏳ Timp rămas:** <t:{timestamp}:R>"
-        end_text = None
 
     desc = (
         f"**Premiu:** {data['premiu']}\n\n"
-        f"**📋 Condiții de participare:**\n{taskuri_text}\n\n"
+        f"**📋 Condiții și detalii:**\n{conditii_text}\n\n"
         f"Apasă butonul **Participă** după ce ai completat taskurile.\n\n"
         f"{status}"
     )
-    if membri_minim:
-        desc += f"\n\n🎟️ **Invitațiile aduc șanse extra** — 1 invitație = 1 ticket bonus!"
 
     embed = discord.Embed(title="🎉 GIVEAWAY", description=desc, color=0xFEE75C)
-    embed.set_footer(text=f"Giveaway • Hydra Prestige")
+    embed.set_footer(text="Giveaway • Hydra Prestige")
     return embed
 
 
@@ -244,15 +294,12 @@ def embed_giveaway(data: dict, guild: discord.Guild) -> discord.Embed:
 @tasks.loop(minutes=INTERVAL_MINUTE)
 async def verifica_live():
     global live_anuntat, youtube_channel_id_resolved
-
     ora_acum = datetime.utcnow().hour + 2
     if not (ORA_START_CHECK <= ora_acum < ORA_END_CHECK):
         return
     if not youtube_channel_id_resolved:
         return
-
     live = await check_live(youtube_channel_id_resolved)
-
     if live and not live_anuntat:
         canal = bot.get_channel(CANAL_YOUTUBE_ID)
         if canal:
@@ -284,13 +331,10 @@ async def verifica_membrii_giveaway():
                 continue
             guild = canal.guild
             if guild.member_count >= data["membri_minim"]:
-                # Pornim countdown-ul
                 data["pornit"] = True
                 data["end_time"] = datetime.utcnow() + timedelta(days=data["zile"])
                 asyncio.create_task(countdown_giveaway(msg_id, data["zile"] * 86400))
                 print(f"✅ Giveaway {msg_id} pornit — s-au atins {data['membri_minim']} membri")
-
-            # Actualizăm embed-ul cu contorul nou
             try:
                 msg = await canal.fetch_message(msg_id)
                 await msg.edit(embed=embed_giveaway(data, guild))
@@ -413,9 +457,19 @@ class VerificareView(discord.ui.View):
 class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
     premiu = discord.ui.TextInput(label="Premiu", placeholder="ex: 1.000.000 Yang", max_length=100)
     durata = discord.ui.TextInput(label="Durată (în zile)", placeholder="ex: 7", max_length=3)
-    membri_minim = discord.ui.TextInput(label="Membri minim pentru start (opțional)", placeholder="ex: 50 — lasă gol dacă nu e necesar", required=False, max_length=6)
-    youtube = discord.ui.TextInput(label="Link YouTube (opțional)", placeholder="https://youtube.com/@canal", required=False, max_length=200)
-    instagram = discord.ui.TextInput(label="Link Instagram (opțional)", placeholder="https://instagram.com/cont", required=False, max_length=200)
+    membri_minim = discord.ui.TextInput(
+        label="Membri minim pentru start (opțional)",
+        placeholder="ex: 50 — lasă gol dacă nu e necesar",
+        required=False,
+        max_length=6
+    )
+    conditii = discord.ui.TextInput(
+        label="Condiții și detalii",
+        placeholder="ex: Subscribe YouTube: https://...\nFollow Instagram: https://...\n1 invitație = 1 șansă extra!",
+        required=False,
+        max_length=1000,
+        style=discord.TextStyle.paragraph
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -450,14 +504,12 @@ class GiveawayModal(discord.ui.Modal, title="Creează Giveaway"):
 
         data = {
             "participanti": set(),
-            "invite_codes": {},  # { user_id: invite_code }
-            "invitati_de": {},   # { invite_code: user_id } — cine a adus pe cine
+            "invite_codes": {},
+            "invitati_de": {},
             "premiu": self.premiu.value.strip(),
             "end_time": end_time,
             "zile": zile,
-            "youtube": self.youtube.value.strip(),
-            "instagram": self.instagram.value.strip(),
-            "tiktok": "",
+            "conditii": self.conditii.value.strip(),
             "canal_id": CANAL_GIVEAWAY_ID,
             "membri_minim": membri_min,
             "pornit": pornit,
@@ -500,15 +552,8 @@ class GiveawayView(discord.ui.View):
             await interaction.response.send_message("✅ Ești deja înscris!", ephemeral=True)
             return
 
-        taskuri = []
-        if data.get("youtube"):
-            taskuri.append(f"[📺 Subscribe pe YouTube]({data['youtube']})")
-        if data.get("instagram"):
-            taskuri.append(f"[📸 Follow pe Instagram]({data['instagram']})")
-        if data.get("tiktok"):
-            taskuri.append(f"[🎵 Follow pe TikTok]({data['tiktok']})")
-
-        mesaj = ("Completează taskurile și apasă **Confirm înscriere**:\n\n" + "\n".join(taskuri)) if taskuri else "Apasă **Confirm înscriere** pentru a participa."
+        conditii = data.get("conditii", "").strip()
+        mesaj = f"Completează condițiile și apasă **Confirm înscriere**:\n\n{conditii}" if conditii else "Apasă **Confirm înscriere** pentru a participa."
         await interaction.response.send_message(mesaj, view=ConfirmView(msg_id), ephemeral=True)
 
 
@@ -529,14 +574,12 @@ class ConfirmView(discord.ui.View):
         data["participanti"].add(user.id)
         total = len(data["participanti"])
 
-        # Dacă giveaway-ul are condiție de membri, generăm invite unic și trimitem DM
         if data.get("membri_minim"):
             guild = interaction.guild
             invite = await genereaza_invite(guild)
             if invite:
                 data["invite_codes"][user.id] = invite.code
                 invite_tracker[invite.code] = user.id
-
                 try:
                     embed_dm = discord.Embed(
                         title="🎟️ Linkul tău de invitație",
@@ -564,24 +607,20 @@ async def countdown_giveaway(msg_id: int, secunde: int):
     await asyncio.sleep(secunde)
     if msg_id not in giveaway_data:
         return
-
     data = giveaway_data[msg_id]
     canal = bot.get_channel(data["canal_id"])
     if not canal:
         return
-
     participanti = list(data["participanti"])
     if not participanti:
         await canal.send("🎉 Giveaway-ul s-a încheiat dar nu a existat niciun participant. Mai încercați data viitoare!")
         del giveaway_data[msg_id]
         return
 
-    # Construim lista de tickete (participanti + tickete bonus din invitații)
-    tickete = list(participanti)  # fiecare participant are cel puțin 1 ticket
+    tickete = list(participanti)
     for user_id in participanti:
         invite_code = data["invite_codes"].get(user_id)
         if invite_code:
-            # Numărăm câți au intrat prin invitația acestui user
             bonus = sum(1 for code, inviter in data.get("invitati_de", {}).items() if inviter == user_id)
             tickete.extend([user_id] * bonus)
 
@@ -606,7 +645,7 @@ async def countdown_giveaway(msg_id: int, secunde: int):
 
 
 # ──────────────────────────────────────────────
-# TRACKING INVITAȚII
+# WELCOME / LEAVE + INVITE TRACKING
 # ──────────────────────────────────────────────
 
 @bot.event
@@ -616,45 +655,83 @@ async def on_member_join(member: discord.Member):
     if rol_unverified:
         await member.add_roles(rol_unverified, reason="Rol implicit la intrare")
 
-    # Welcome
+    # Detectăm invitația folosită
+    inviter = None
+    inviter_count = 0
+    try:
+        invites_after = await member.guild.invites()
+        invites_before = cached_invites.get(member.guild.id, {})
+
+        for invite in invites_after:
+            uses_before = invites_before.get(invite.code, 0)
+            if invite.uses > uses_before:
+                # Această invitație a fost folosită
+                if invite.inviter:
+                    inviter = invite.inviter
+                    add_invite(inviter.id, member.id)
+                    inviter_count = get_invite_count(inviter.id)
+
+                    # Tracking pentru giveaway
+                    if invite.code in invite_tracker:
+                        for msg_id, data in giveaway_data.items():
+                            if invite.code in data.get("invite_codes", {}).values():
+                                if "invitati_de" not in data:
+                                    data["invitati_de"] = {}
+                                data["invitati_de"][member.id] = invite_tracker[invite.code]
+                break
+
+        # Actualizăm cache-ul
+        cached_invites[member.guild.id] = {i.code: i.uses for i in invites_after}
+
+    except Exception as e:
+        print(f"⚠️  Eroare invite tracking: {e}")
+
+    # Welcome embed
     canal = bot.get_channel(CANAL_WELCOME_ID)
     if canal:
-        embed = discord.Embed(
-            title="👋 Membru nou!",
-            description=f"Bun venit pe server, {member.mention}!\n\nMergi în <#{CANAL_VERIFICARE_ID}> pentru a obține acces.",
-            color=0x57F287
-        )
+        if inviter:
+            desc = (
+                f"Bun venit pe server, {member.mention}!\n\n"
+                f"📨 Invitat de **{inviter.display_name}** "
+                f"(total invitații: **{inviter_count}**)\n\n"
+                f"Mergi în <#{CANAL_VERIFICARE_ID}> pentru a obține acces."
+            )
+        else:
+            desc = (
+                f"Bun venit pe server, {member.mention}!\n\n"
+                f"Mergi în <#{CANAL_VERIFICARE_ID}> pentru a obține acces."
+            )
+
+        embed = discord.Embed(title="👋 Membru nou!", description=desc, color=0x57F287)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Membri: {member.guild.member_count}")
         await canal.send(embed=embed)
-
-    # Detectăm prin ce invitație a intrat pentru giveaway
-    try:
-        invites_after = await member.guild.invites()
-        for code, inviter_id in list(invite_tracker.items()):
-            invite_obj = next((i for i in invites_after if i.code == code), None)
-            # Dacă invitația nu mai apare sau uses a crescut
-            if invite_obj is None:
-                # A fost folosită și ștearsă — dar noi avem max_uses=0 deci nu se șterge
-                pass
-            # Marcăm în giveaway-urile active
-            for msg_id, data in giveaway_data.items():
-                if code in data.get("invite_codes", {}).values():
-                    if "invitati_de" not in data:
-                        data["invitati_de"] = {}
-                    data["invitati_de"][member.id] = inviter_id
-    except Exception:
-        pass
 
 
 @bot.event
 async def on_member_remove(member: discord.Member):
+    # Drop protection — scădem invitația
+    inviter_id = remove_invite(member.id)
+
     canal = bot.get_channel(CANAL_WELCOME_ID)
     if canal:
-        embed = discord.Embed(title="🚪 Membru plecat", description=f"**{member.name}** a părăsit serverul.", color=0xED4245)
+        if inviter_id:
+            inviter_count = get_invite_count(inviter_id)
+            desc = f"**{member.name}** a părăsit serverul.\n📉 Invitația lui **<@{inviter_id}>** a fost scăzută (total: **{inviter_count}**)"
+        else:
+            desc = f"**{member.name}** a părăsit serverul."
+
+        embed = discord.Embed(title="🚪 Membru plecat", description=desc, color=0xED4245)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text=f"Membri: {member.guild.member_count}")
         await canal.send(embed=embed)
+
+    # Actualizăm cache invitații
+    try:
+        invites = await member.guild.invites()
+        cached_invites[member.guild.id] = {i.code: i.uses for i in invites}
+    except Exception:
+        pass
 
 
 # ──────────────────────────────────────────────
@@ -729,18 +806,31 @@ async def giveaway_cmd(interaction: discord.Interaction):
     await interaction.response.send_modal(GiveawayModal())
 
 
+@tree.command(name="invitatii", description="Vezi câte invitații ai adus pe server")
+@app_commands.describe(membru="Membrul de verificat (lasă gol pentru tine)")
+async def invitatii_cmd(interaction: discord.Interaction, membru: discord.Member = None):
+    target = membru or interaction.user
+    count = get_invite_count(target.id)
+    inviter_id = get_inviter(target.id)
+    inviter_text = f"\n📨 Invitat de: <@{inviter_id}>" if inviter_id else ""
+    embed = discord.Embed(
+        title="📊 Statistici invitații",
+        description=f"**{target.display_name}** a adus **{count}** membre pe server.{inviter_text}",
+        color=0x5865F2
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 # ──────────────────────────────────────────────
 # ON READY
 # ──────────────────────────────────────────────
-
-OWNER_ID = 401451926681812993
 
 @bot.event
 async def on_ready():
     global youtube_channel_id_resolved
     print(f"✅ Bot pornit ca {bot.user}")
 
-    # DM către owner la fiecare pornire
+    # DM către owner
     try:
         guild = bot.guilds[0]
         owner = guild.get_member(OWNER_ID)
@@ -755,6 +845,15 @@ async def on_ready():
 
     await tree.sync()
     print("✅ Slash commands sincronizate")
+
+    # Cache invitații la pornire
+    for guild in bot.guilds:
+        try:
+            invites = await guild.invites()
+            cached_invites[guild.id] = {i.code: i.uses for i in invites}
+            print(f"✅ Cache invitații încărcat pentru {guild.name}")
+        except Exception:
+            pass
 
     if YOUTUBE_API_KEY:
         youtube_channel_id_resolved = await get_youtube_channel_id(YOUTUBE_HANDLE)
