@@ -927,6 +927,18 @@ async def finalizeaza_giveaway(msg_id: int):
     canal = bot.get_channel(data["canal_id"])
     if not canal:
         return
+
+    # Dezactivăm mesajul original (butonul Participă) dacă încă există
+    try:
+        msg_original = await canal.fetch_message(msg_id)
+        embed_vechi = msg_original.embeds[0] if msg_original.embeds else None
+        if embed_vechi:
+            embed_vechi.description += "\n\n**🔒 Acest giveaway s-a încheiat.**"
+        view_dezactivat = discord.ui.View(timeout=None)
+        await msg_original.edit(embed=embed_vechi, view=view_dezactivat)
+    except Exception:
+        pass
+
     participanti = list(data["participanti"])
     if not participanti:
         await canal.send("🎉 Giveaway-ul s-a încheiat dar nu a existat niciun participant.")
@@ -1179,13 +1191,6 @@ async def extrage_giveaway(interaction: discord.Interaction, message_id: str):
 
     data = giveaway_data[msg_id]
     canal = bot.get_channel(data["canal_id"])
-
-    # Ștergem mesajul original al giveaway-ului
-    try:
-        msg = await canal.fetch_message(msg_id)
-        await msg.delete()
-    except Exception:
-        pass
 
     await finalizeaza_giveaway(msg_id)
     await interaction.response.send_message("✅ Giveaway extras cu succes, înainte de termen!", ephemeral=True)
