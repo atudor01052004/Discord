@@ -973,6 +973,160 @@ async def finalizeaza_giveaway(msg_id: int):
 
 
 # ──────────────────────────────────────────────
+# SISTEM CUFERE — Joc de ghicit
+# ──────────────────────────────────────────────
+
+cufere_data = {}
+# { msg_id: { intrebare, end_time, secunde_durata, canal_id, raspunsuri: [(user_id, text, timestamp)] } }
+
+
+def embed_cufere(data: dict) -> discord.Embed:
+    if not data.get("incheiat"):
+        timestamp = int(data["end_time"].timestamp())
+        status = f"**⏰ Se încheie:** <t:{timestamp}:R>"
+    else:
+        status = "**🔒 Acest joc s-a încheiat.**"
+
+    desc = (
+        f"**{data['intrebare']}**\n\n"
+        f"Apasă butonul **Ghicește** și scrie răspunsul tău!\n\n"
+        f"{status}"
+    )
+    embed = discord.Embed(title="📦 GHICEȘTE ȘI CÂȘTIGĂ", description=desc, color=0xE67E22)
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    return embed
+
+
+class CufereRaspunsModal(discord.ui.Modal, title="Răspunsul tău"):
+    raspuns = discord.ui.TextInput(
+        label="Răspunsul tău",
+        placeholder="ex: 5 cufere",
+        max_length=100
+    )
+
+    def __init__(self, msg_id: int):
+        super().__init__()
+        self.msg_id = msg_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.msg_id not in cufere_data:
+            await interaction.response.send_message("❌ Jocul nu mai este activ.", ephemeral=True)
+            return
+
+        data = cufere_data[self.msg_id]
+        user = interaction.user
+
+        # Verificăm dacă userul a răspuns deja — îi actualizăm răspunsul
+        existing_idx = None
+        for idx, (uid, _, _) in enumerate(data["raspunsuri"]):
+            if uid == user.id:
+                existing_idx = idx
+                break
+
+        if existing_idx is not None:
+            data["raspunsuri"][existing_idx] = (user.id, self.raspuns.value.strip(), datetime.utcnow())
+            await interaction.response.send_message("✅ Răspunsul tău a fost actualizat!", ephemeral=True)
+        else:
+            data["raspunsuri"].append((user.id, self.raspuns.value.strip(), datetime.utcnow()))
+            await interaction.response.send_message("✅ Răspunsul tău a fost înregistrat!", ephemeral=True)
+
+
+class CufereView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📦 Ghicește", style=discord.ButtonStyle.primary, custom_id="cufere_ghiceste")
+    async def ghiceste(self, interaction: discord.Interaction, button: discord.ui.Button):
+        msg_id = interaction.message.id
+        if msg_id not in cufere_data:
+            await interaction.response.send_message("❌ Jocul nu mai este activ.", ephemeral=True)
+            return
+        await interaction.response.send_modal(CufereRaspunsModal(msg_id))
+
+
+class CufereModal(discord.ui.Modal, title="Creează Joc Cufere"):
+    intrebare = discord.ui.TextInput(
+        label="Întrebare / Premiu",
+        placeholder="ex: Câte cufere credeți că dropez?",
+        max_length=200
+    )
+    durata = discord.ui.TextInput(
+        label="Durată",
+        placeholder="ex: 5m, 1h, 30m",
+        max_length=20
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        secunde_durata = parse_durata(self.durata.value)
+        if not secunde_durata:
+            await interaction.response.send_message(
+                "❌ Format durată invalid. Folosește ex: `5m`, `1h`, `30m`.", ephemeral=True
+            )
+            return
+
+        canal = interaction.channel
+        end_time = datetime.utcnow() + timedelta(seconds=secunde_durata)
+
+        data = {
+            "intrebare": self.intrebare.value.strip(),
+            "end_time": end_time,
+            "secunde_durata": secunde_durata,
+            "canal_id": canal.id,
+            "raspunsuri": [],
+            "incheiat": False,
+        }
+
+        view = CufereView()
+        msg = await canal.send(embed=embed_cufere(data), view=view)
+        cufere_data[msg.id] = data
+
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+
+        await interaction.response.send_message("✅ Joc Cufere creat cu succes!", ephemeral=True, delete_after=5)
+        asyncio.create_task(finalizeaza_cufere(msg.id, secunde_durata))
+
+
+async def finalizeaza_cufere(msg_id: int, secunde: int):
+    await asyncio.sleep(secunde)
+    if msg_id not in cufere_data:
+        return
+    data = cufere_data[msg_id]
+    data["incheiat"] = True
+    canal = bot.get_channel(data["canal_id"])
+    if not canal:
+        return
+
+    try:
+        msg_original = await canal.fetch_message(msg_id)
+        await msg_original.edit(embed=embed_cufere(data), view=discord.ui.View(timeout=None))
+    except Exception:
+        pass
+
+    if not data["raspunsuri"]:
+        await canal.send("📦 Jocul s-a încheiat dar nu a existat niciun răspuns.")
+        del cufere_data[msg_id]
+        return
+
+    linii = []
+    for user_id, raspuns, _ in data["raspunsuri"]:
+        linii.append(f"<@{user_id}> — **{raspuns}**")
+
+    embed = discord.Embed(
+        title="📦 Răspunsurile primite",
+        description=(
+            f"**{data['intrebare']}**\n\n" + "\n".join(linii)
+        ),
+        color=0xE67E22
+    )
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    await canal.send(embed=embed)
+    del cufere_data[msg_id]
+
+
+# ──────────────────────────────────────────────
 # WELCOME / LEAVE + INVITE TRACKING
 # ──────────────────────────────────────────────
 
@@ -1165,6 +1319,59 @@ async def anunt_cmd(interaction: discord.Interaction, canal: discord.TextChannel
     await interaction.response.send_modal(AnuntModal(canal.id))
 
 
+@tree.command(name="cufere", description="Creează un joc de ghicit (ex: câte cufere dropezi)")
+async def cufere_cmd(interaction: discord.Interaction):
+    if not are_rol_staff(interaction.user):
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
+        return
+    await interaction.response.send_modal(CufereModal())
+
+
+@tree.command(name="help", description="Vezi toate comenzile disponibile ale botului")
+async def help_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📖 Comenzi disponibile",
+        description="Lista completă a comenzilor botului Confucius.",
+        color=0x5865F2
+    )
+    embed.add_field(
+        name="🎉 Giveaway",
+        value=(
+            "`/giveaway` — creează un giveaway nou\n"
+            "`/anuleaza-giveaway [message_id]` — anulează un giveaway activ\n"
+            "`/extrage-giveaway [message_id]` — extrage câștigătorul înainte de termen"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📦 Cufere",
+        value="`/cufere` — creează un joc de ghicit (ex: câte cufere dropezi)",
+        inline=False
+    )
+    embed.add_field(
+        name="📊 Invitații",
+        value="`/invitatii [@membru]` — vezi câte invitații a adus un membru",
+        inline=False
+    )
+    embed.add_field(
+        name="📢 Anunțuri",
+        value="`/anunt [canal]` — postează un anunț formatat ca embed în orice canal",
+        inline=False
+    )
+    embed.add_field(
+        name="🛡️ Moderare",
+        value=(
+            "`/mute [membru] [motiv]` — dezactivează scrisul\n"
+            "`/timeout [membru] [minute] [motiv]` — aplică timeout\n"
+            "`/kick [membru] [motiv]` — dă afară un membru\n"
+            "`/ban [membru] [motiv]` — banează permanent"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @tree.command(name="giveaway", description="Creează un giveaway")
 async def giveaway_cmd(interaction: discord.Interaction):
     if not are_rol_staff(interaction.user):
@@ -1269,6 +1476,7 @@ async def on_ready():
     bot.add_view(VerificareGamerView())
     bot.add_view(DropdownGamerView())
     bot.add_view(GiveawayView())
+    bot.add_view(CufereView())
 
     await tree.sync()
     print("✅ Slash commands sincronizate")
