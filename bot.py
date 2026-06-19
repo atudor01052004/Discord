@@ -1430,7 +1430,8 @@ async def help_cmd(interaction: discord.Interaction):
         value=(
             "`/giveaway` — creează un giveaway nou\n"
             "`/anuleaza-giveaway [message_id]` — anulează un giveaway activ\n"
-            "`/extrage-giveaway [message_id]` — extrage câștigătorul înainte de termen"
+            "`/extrage-giveaway [message_id]` — extrage câștigătorul înainte de termen\n"
+            "`/participanti-giveaway [message_id]` — vezi participanții activi"
         ),
         inline=False
     )
@@ -1480,6 +1481,46 @@ async def giveaway_cmd(interaction: discord.Interaction, mentioneaza_everyone: b
         await interaction.response.send_message("❌ Numărul de câștigători trebuie să fie între 1 și 20.", ephemeral=True)
         return
     await interaction.response.send_modal(GiveawayModal(mentioneaza_everyone, numar_castigatori))
+
+
+@tree.command(name="participanti-giveaway", description="Vezi câți participanți sunt la un giveaway activ")
+@app_commands.describe(message_id="ID-ul mesajului giveaway-ului")
+async def participanti_giveaway(interaction: discord.Interaction, message_id: str):
+    try:
+        msg_id = int(message_id.strip())
+    except ValueError:
+        await interaction.response.send_message("❌ ID invalid.", ephemeral=True)
+        return
+
+    if msg_id not in giveaway_data:
+        await interaction.response.send_message("❌ Nu există niciun giveaway activ cu acest ID.", ephemeral=True)
+        return
+
+    data = giveaway_data[msg_id]
+    participanti = list(data["participanti"])
+    total_tickete = len(participanti)
+    for uid in participanti:
+        invite_code = data["invite_codes"].get(uid)
+        if invite_code:
+            bonus = sum(1 for code, inviter in data.get("invitati_de", {}).items() if inviter == uid)
+            total_tickete += bonus
+
+    embed = discord.Embed(
+        title="📊 Participanți giveaway",
+        description=(
+            f"**Premiu:** {data['premiu']}\n\n"
+            f"👥 **Participanți:** {len(participanti)}\n"
+            f"🎟️ **Total tickete:** {total_tickete}"
+        ),
+        color=0x5865F2
+    )
+
+    if participanti and len(participanti) <= 30:
+        lista = "\n".join(f"<@{uid}>" for uid in participanti)
+        embed.add_field(name="Lista participanți", value=lista, inline=False)
+
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @tree.command(name="extrage-giveaway", description="Extrage câștigătorul unui giveaway înainte de termen")
