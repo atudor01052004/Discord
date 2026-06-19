@@ -205,6 +205,23 @@ def get_inviter(user_id: int):
     data = load_invite_data()
     return data.get(str(user_id), {}).get("invited_by")
 
+def set_invite_count(user_id: int, count: int):
+    """Setează manual numărul de invitații al unui user (admin override)."""
+    data = load_invite_data()
+    key = str(user_id)
+    if key not in data:
+        data[key] = {"invites": 0, "invited_by": None, "invited_users": []}
+    data[key]["invites"] = count
+    save_invite_data(data)
+
+def get_leaderboard_invitatii() -> list:
+    """Returnează lista (user_id, invites) sortată descrescător."""
+    data = load_invite_data()
+    lista = [(int(uid), info.get("invites", 0)) for uid, info in data.items()]
+    lista = [item for item in lista if item[1] > 0]
+    lista.sort(key=lambda x: x[1], reverse=True)
+    return lista
+
 
 # ──────────────────────────────────────────────
 # GIVEAWAY DATA PERSISTENT
@@ -1392,7 +1409,11 @@ async def help_cmd(interaction: discord.Interaction):
     )
     embed.add_field(
         name="📊 Invitații",
-        value="`/invitatii [@membru]` — vezi câte invitații a adus un membru",
+        value=(
+            "`/invitatii [@membru]` — vezi câte invitații a adus un membru\n"
+            "`/leaderboard-invitatii` — clasamentul membrilor după invitații\n"
+            "`/seteaza-invitatii [@membru] [numar]` — setează manual invitațiile (admin)"
+        ),
         inline=False
     )
     embed.add_field(
@@ -1494,6 +1515,48 @@ async def invitatii_cmd(interaction: discord.Interaction, membru: discord.Member
         description=f"**{target.display_name}** a adus **{count}** membre pe server.{inviter_text}",
         color=0x5865F2
     )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@tree.command(name="leaderboard-invitatii", description="Vezi clasamentul membrilor după numărul de invitații")
+async def leaderboard_invitatii_cmd(interaction: discord.Interaction):
+    lista = get_leaderboard_invitatii()
+    if not lista:
+        await interaction.response.send_message("📊 Nimeni nu a adus încă invitații.", ephemeral=True)
+        return
+
+    linii = []
+    medalii = ["🥇", "🥈", "🥉"]
+    for idx, (user_id, count) in enumerate(lista[:15]):
+        prefix = medalii[idx] if idx < 3 else f"`{idx + 1}.`"
+        linii.append(f"{prefix} <@{user_id}> — **{count}** invitații")
+
+    embed = discord.Embed(
+        title="🏆 Clasament invitații",
+        description="\n".join(linii),
+        color=0xF1C40F
+    )
+    embed.set_footer(text="Hydra Prestige • Metin2 Community")
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="seteaza-invitatii", description="Setează manual numărul de invitații al unui membru")
+@app_commands.describe(membru="Membrul de modificat", numar="Numărul nou de invitații")
+async def seteaza_invitatii_cmd(interaction: discord.Interaction, membru: discord.Member, numar: int):
+    if not are_rol_staff(interaction.user):
+        await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
+        return
+    if numar < 0:
+        await interaction.response.send_message("❌ Numărul nu poate fi negativ.", ephemeral=True)
+        return
+
+    set_invite_count(membru.id, numar)
+    embed = discord.Embed(
+        title="✅ Invitații actualizate",
+        description=f"**{membru.display_name}** are acum **{numar}** invitații.",
+        color=0x57F287
+    )
+    embed.set_footer(text=f"Modificat de: {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
