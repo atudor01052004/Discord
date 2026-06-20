@@ -62,6 +62,7 @@ ROLURI_STAFF   = ["Admin", "Moderator"]
 OWNER_ID       = 401451926681812993
 
 YOUTUBE_HANDLE  = "Tenek13"
+YOUTUBE_CHANNEL_ID_FIX = "UC6QbwXMgPiP7tenO0N6GvuA"  # ID fix, evită căutarea nesigură prin search.list
 ORA_START_CHECK = 15
 ORA_END_CHECK   = 23
 INTERVAL_MINUTE = 5
@@ -1906,12 +1907,9 @@ async def on_ready():
         print(f"✅ {len(giveaway_data)} giveaway(uri) active reluate din JSON")
 
     if YOUTUBE_API_KEY:
-        youtube_channel_id_resolved = await get_youtube_channel_id(YOUTUBE_HANDLE)
-        if youtube_channel_id_resolved:
-            print(f"✅ YouTube channel ID rezolvat: {youtube_channel_id_resolved}")
-            verifica_live.start()
-        else:
-            print("⚠️  Nu s-a putut rezolva channel ID-ul YouTube.")
+        youtube_channel_id_resolved = YOUTUBE_CHANNEL_ID_FIX
+        print(f"✅ YouTube channel ID setat: {youtube_channel_id_resolved}")
+        verifica_live.start()
     else:
         print("⚠️  YOUTUBE_API_KEY lipsă")
 
@@ -1943,7 +1941,7 @@ async def on_ready():
         embed_gaming = discord.Embed(
             title="🎮 Verificare Gaming",
             description=(
-                "Joci **alte jocuri**? Apasă butonul de mai jos pentru a obține"
+                "Joci **alte jocuri**? Apasă butonul de mai jos pentru a obține "
                 "accesul la canalele de gaming.\n\n"
                 "**Vei primi:** `🎮 Gamer` + rolul jocului tău"
             ),
@@ -1973,4 +1971,3 @@ async def on_ready():
 
 bot.run(TOKEN)
 # test persistence check
-#testez baza de date pentru invitatii
