@@ -26,6 +26,7 @@ CANAL_GIVEAWAY_ID    = 1513873592423682109
 CANAL_YOUTUBE_ID     = 1513873645485817938
 CANAL_MEMBRI_ID      = 1516433983817257190
 CANAL_LOG_GIVEAWAY_ID = 1517580517799886991
+CANAL_LOG_SUGESTII_ID = 1524302970332905523
 
 CANALE_MARKET = [
     1516062696293007410,
@@ -1368,7 +1369,7 @@ class SugestieRaspunsModal(discord.ui.Modal, title="Sugestia ta"):
             data["raspunsuri"].append((user.id, self.raspuns.value.strip(), datetime.utcnow()))
             await interaction.response.send_message("✅ Sugestia ta a fost înregistrată!", ephemeral=True)
 
-        canal_log = bot.get_channel(CANAL_LOG_GIVEAWAY_ID)
+        canal_log = bot.get_channel(CANAL_LOG_SUGESTII_ID)
         if canal_log:
             sufix = " *(actualizat)*" if actualizat else ""
             try:
@@ -1635,9 +1636,10 @@ class AnuntModal(discord.ui.Modal, title="Creează Anunț"):
         max_length=300
     )
 
-    def __init__(self, canal_id: int):
+    def __init__(self, canal_id: int, mentioneaza_everyone: bool = False):
         super().__init__()
         self.canal_id = canal_id
+        self.mentioneaza_everyone = mentioneaza_everyone
 
     async def on_submit(self, interaction: discord.Interaction):
         canal = bot.get_channel(self.canal_id)
@@ -1655,18 +1657,35 @@ class AnuntModal(discord.ui.Modal, title="Creează Anunț"):
         embed.set_footer(text=f"Anunț de {interaction.user.display_name} • Hydra Prestige")
         embed.timestamp = datetime.utcnow()
 
-        await canal.send(embed=embed)
+        mesaj_mention = "@everyone" if self.mentioneaza_everyone else None
+        await canal.send(mesaj_mention, embed=embed)
         await interaction.response.send_message(f"✅ Anunț postat în <#{self.canal_id}>!", ephemeral=True)
 
 
 @tree.command(name="anunt", description="Postează un anunț formatat ca embed într-un canal ales")
-@app_commands.describe(canal="Canalul în care se postează anunțul (lasă gol pentru canalul curent)")
-async def anunt_cmd(interaction: discord.Interaction, canal: discord.TextChannel = None):
+@app_commands.describe(
+    canal="Canalul în care se postează anunțul (lasă gol pentru canalul curent)",
+    canal_id="ID-ul canalului, alternativ dacă nu apare în listă (click dreapta pe canal → Copy ID)",
+    mentioneaza_everyone="Trimite @everyone la postare? (implicit: nu)"
+)
+async def anunt_cmd(interaction: discord.Interaction, canal: discord.TextChannel = None, canal_id: str = None, mentioneaza_everyone: bool = False):
     if not are_rol_staff(interaction.user):
         await interaction.response.send_message("❌ Nu ai permisiunea.", ephemeral=True)
         return
-    canal_tinta = canal or interaction.channel
-    await interaction.response.send_modal(AnuntModal(canal_tinta.id))
+
+    canal_tinta_id = None
+    if canal_id and canal_id.strip():
+        try:
+            canal_tinta_id = int(canal_id.strip())
+        except ValueError:
+            await interaction.response.send_message("❌ ID canal invalid.", ephemeral=True)
+            return
+    elif canal:
+        canal_tinta_id = canal.id
+    else:
+        canal_tinta_id = interaction.channel.id
+
+    await interaction.response.send_modal(AnuntModal(canal_tinta_id, mentioneaza_everyone))
 
 
 @tree.command(name="cufere", description="Creează un joc de ghicit (ex: câte cufere dropezi)")
